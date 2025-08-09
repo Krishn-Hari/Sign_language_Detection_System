@@ -2,10 +2,13 @@ services:
   - type: web
     name: isl-sign-detector
     env: python
+    runtime: python-3.11.9
     plan: free
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn app.server:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: PYTHON_RUNTIME_VERSION
         value: 3.11.9
     healthCheckPath: /

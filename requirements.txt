@@ -9,3 +9,4 @@ uvicorn[standard]==0.30.1
 python-multipart==0.0.9
 pygame==2.6.0
 gtts==2.5.1
+scikit-learn==1.5.1
