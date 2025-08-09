@@ -31,21 +31,26 @@ function speakText(text) {
   // Small delay to ensure cancellation is processed
   setTimeout(() => {
     const uttr = new SpeechSynthesisUtterance(text);
-    uttr.rate = 1.0;
+    uttr.rate = 0.9;
     uttr.pitch = 1.0;
+    uttr.volume = 1.0;
     uttr.lang = 'en-US';
     
     // Add error handling
     uttr.onerror = (event) => {
-      console.error('Speech synthesis error:', event);
+      console.error('Speech synthesis error:', event.error);
     };
     
     uttr.onend = () => {
-      console.log('Speech synthesis completed');
+      console.log('Speech synthesis completed for:', text);
+    };
+    
+    uttr.onstart = () => {
+      console.log('Speech synthesis started for:', text);
     };
     
     window.speechSynthesis.speak(uttr);
-  }, 100);
+  }, 150);
 }
 
 // Webcam & detection (existing logic retained)
@@ -69,14 +74,17 @@ function fitCanvas() {
 
 async function startWebcam() {
   try {
+    console.log('Requesting webcam access...');
     stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
     video.srcObject = stream;
     video.onloadedmetadata = () => {
       video.play();
       fitCanvas();
+      console.log('Webcam started successfully');
     };
   } catch (e) {
-    alert('Failed to access webcam: ' + e);
+    console.error('Webcam access error:', e);
+    alert('Failed to access webcam: ' + e.message + '\n\nPlease ensure:\n1. Camera permissions are granted\n2. Camera is not being used by another application\n3. You are using HTTPS or localhost');
   }
 }
 
@@ -100,12 +108,13 @@ async function predictBlob(blob, updateTargets) {
   form.append('image', blob, 'frame.jpg');
   
   try {
+    console.log('Sending prediction request...');
     const res = await fetch('/predict', { method: 'POST', body: form });
     if (!res.ok) {
       throw new Error(`HTTP error! status: ${res.status}`);
     }
     const data = await res.json();
-    console.log('Prediction result:', data);
+    console.log('Prediction result:', data.label, 'confidence:', data.confidence);
     updateTargets(data);
   } catch (error) {
     console.error('Prediction error:', error);
@@ -123,7 +132,7 @@ function getConfThreshold() {
 
 function updatePrediction({ label, confidence, message }) {
   $('#prediction').textContent = label ?? '–';
-  $('#confidence').textContent = 'Confidence: ' + (confidence?.toFixed?.(2) ?? '–');
+  $('#confidence').textContent = 'Confidence: ' + (confidence?.toFixed?.(3) ?? '–');
   $('#message').textContent = message ?? '';
 
   const confTh = getConfThreshold();
@@ -133,6 +142,7 @@ function updatePrediction({ label, confidence, message }) {
     if (label !== lastLabel) {
       lastLabel = label;
       stableStart = now;
+      console.log('New stable label detected:', label);
     }
   } else {
     lastLabel = '';
@@ -141,8 +151,8 @@ function updatePrediction({ label, confidence, message }) {
 
   const speakOn = $('#speak-toggle').checked;
   if (speakOn && label && confidence >= confTh && label !== lastSpoken) {
+    console.log('Speaking label:', label, 'confidence:', confidence);
     lastSpoken = label;
-    console.log('Speaking:', label);
     speakText(label);
   }
 
@@ -174,6 +184,10 @@ async function aiLoop() {
   if (!stream) await startWebcam();
   try {
     const blob = await captureFrame();
+    if (!blob) {
+      console.error('Failed to capture frame');
+      return;
+    }
     await predictBlob(blob, updatePrediction);
   } catch (error) {
     console.error('AI loop error:', error);
@@ -182,6 +196,7 @@ async function aiLoop() {
 
 function startAI() {
   if (aiTimer) return;
+  console.log('Starting AI detection...');
   aiBadge.classList.remove('hidden');
   $('#btn-ai').textContent = 'Stop AI';
   aiTimer = setInterval(async () => {
@@ -196,6 +211,7 @@ function startAI() {
 
 function stopAI() {
   if (!aiTimer) return;
+  console.log('Stopping AI detection...');
   clearInterval(aiTimer);
   aiTimer = null;
   aiBadge.classList.add('hidden');
@@ -223,9 +239,10 @@ $('#btn-upload-predict').addEventListener('click', async () => {
     alert('Please choose an image first.');
     return;
   }
+  console.log('Predicting uploaded file:', file.name);
   await predictBlob(file, ({ label, confidence, message }) => {
     $('#prediction-upload').textContent = label ?? '–';
-    $('#confidence-upload').textContent = 'Confidence: ' + (confidence?.toFixed?.(2) ?? '–');
+    $('#confidence-upload').textContent = 'Confidence: ' + (confidence?.toFixed?.(3) ?? '–');
     $('#message-upload').textContent = message ?? '';
   });
 });
@@ -287,6 +304,12 @@ $('#btn-download-sentence').addEventListener('click', () => {
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
+});
+
+// Test speech functionality
+$('#btn-test-speech').addEventListener('click', () => {
+  console.log('Testing speech synthesis...');
+  speakText('Speech test successful');
 });
 
 // Default to webcam tab

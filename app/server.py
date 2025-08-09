@@ -2,6 +2,7 @@ import io
 import json
 import os
 import logging
+import warnings
 from typing import List
 
 import numpy as np
@@ -13,6 +14,9 @@ from PIL import Image
 import pandas as pd
 import mediapipe as mp
 try:
+    # Suppress TensorFlow warnings
+    os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+    warnings.filterwarnings('ignore', category=UserWarning)
     from tensorflow import keras
 except ImportError as e:
     print(f"TensorFlow import error: {e}")
@@ -124,7 +128,7 @@ def extract_landmarks(img_np: np.ndarray, hand_landmarks) -> List[List[int]]:
 def preprocess_landmarks(landmarks: List[List[int]]) -> List[float]:
     """Preprocess landmarks for model input"""
     if not landmarks:
-        return []
+        return [0.0] * 42  # Return zeros for 21 landmarks * 2 coordinates
     
     base_x, base_y = landmarks[0][0], landmarks[0][1]
     rel = [[x - base_x, y - base_y] for x, y in landmarks]
@@ -136,24 +140,42 @@ def preprocess_landmarks(landmarks: List[List[int]]) -> List[float]:
 def predict_image(pil_img: Image.Image) -> np.ndarray:
     """Run prediction on a single image"""
     if MODEL is None:
-        logger.warning("Model not loaded, cannot predict")
+        logger.error("Model not loaded, cannot predict")
         return None
     
+    # Convert PIL image to numpy array
     img_np = np.array(pil_img)
+    if len(img_np.shape) == 3 and img_np.shape[2] == 3:
+        # Convert RGB to BGR for MediaPipe
+        img_np = img_np[:, :, ::-1]
+    
     mp_hands = mp.solutions.hands
-    with mp_hands.Hands(static_image_mode=True, max_num_hands=1, min_detection_confidence=0.6) as hands:
+    with mp_hands.Hands(
+        static_image_mode=True, 
+        max_num_hands=1, 
+        min_detection_confidence=0.5,
+        min_tracking_confidence=0.5,
+        model_complexity=0
+    ) as hands:
         results = hands.process(img_np)
         if not results.multi_hand_landmarks:
+            logger.warning("No hand landmarks detected")
             return None
+            
         hand_landmarks = results.multi_hand_landmarks[0]
         points = extract_landmarks(img_np, hand_landmarks)
         features = preprocess_landmarks(points)
-        if len(features) == 0:
+        
+        # Ensure we have the right number of features
+        expected_features = 42  # 21 landmarks * 2 coordinates
+        if len(features) != expected_features:
+            logger.error(f"Expected {expected_features} features, got {len(features)}")
             return None
         
         df = pd.DataFrame([features])
         try:
             probs = MODEL.predict(df, verbose=0)[0]
+            logger.info(f"Prediction successful, max confidence: {np.max(probs):.3f}")
             return probs
         except Exception as e:
             logger.error(f"Error during prediction: {e}")
@@ -163,16 +185,19 @@ def predict_image(pil_img: Image.Image) -> np.ndarray:
 @app.post("/predict")
 async def predict(image: UploadFile = File(...)):
     """Predict sign language from uploaded image"""
+    logger.info(f"Received prediction request for file: {image.filename}")
+    
     try:
         content = await image.read()
         base_img = Image.open(io.BytesIO(content)).convert("RGB")
+        logger.info(f"Image loaded successfully, size: {base_img.size}")
     except Exception as e:
+        logger.error(f"Error loading image: {e}")
         raise HTTPException(status_code=400, detail=f"Invalid image: {e}")
 
     if MODEL is None:
+        logger.error("Model not available for prediction")
         return JSONResponse({"label": None, "confidence": 0.0, "message": "Model not loaded"})
-
-    logger.info("Processing prediction request")
 
     # Test-time augmentation: slight resizes around the base image
     scales = [1.0, 0.9, 1.1]
@@ -197,8 +222,10 @@ async def predict(image: UploadFile = File(...)):
         if probs is not None:
             probs_accum = probs if probs_accum is None else (probs_accum + probs)
             valid += 1
+            logger.info(f"Valid prediction for scale {s}")
 
     if not valid:
+        logger.warning("No valid predictions from any scale")
         return JSONResponse({"label": None, "confidence": 0.0, "message": "No hand detected"})
 
     probs_avg = probs_accum / valid
@@ -206,7 +233,7 @@ async def predict(image: UploadFile = File(...)):
     label = LABELS[idx] if idx < len(LABELS) else str(idx)
     conf = float(probs_avg[idx])
     
-    logger.info(f"Prediction: {label} (confidence: {conf:.2f})")
+    logger.info(f"Final prediction: {label} (confidence: {conf:.3f})")
     return {"label": label, "confidence": conf}
 
 
