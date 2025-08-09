@@ -24,12 +24,28 @@ $('#tab-about').addEventListener('click', () => switchTab('#tab-about'));
 // Speech helpers
 function speakText(text) {
   if (!window.speechSynthesis) return;
-  const uttr = new SpeechSynthesisUtterance(text);
-  uttr.rate = 1.0;
-  uttr.pitch = 1.0;
-  uttr.lang = 'en-US';
+  
+  // Cancel any ongoing speech
   window.speechSynthesis.cancel();
-  window.speechSynthesis.speak(uttr);
+  
+  // Small delay to ensure cancellation is processed
+  setTimeout(() => {
+    const uttr = new SpeechSynthesisUtterance(text);
+    uttr.rate = 1.0;
+    uttr.pitch = 1.0;
+    uttr.lang = 'en-US';
+    
+    // Add error handling
+    uttr.onerror = (event) => {
+      console.error('Speech synthesis error:', event);
+    };
+    
+    uttr.onend = () => {
+      console.log('Speech synthesis completed');
+    };
+    
+    window.speechSynthesis.speak(uttr);
+  }, 100);
 }
 
 // Webcam & detection (existing logic retained)
@@ -82,9 +98,23 @@ function captureFrame() {
 async function predictBlob(blob, updateTargets) {
   const form = new FormData();
   form.append('image', blob, 'frame.jpg');
-  const res = await fetch('/predict', { method: 'POST', body: form });
-  const data = await res.json();
-  updateTargets(data);
+  
+  try {
+    const res = await fetch('/predict', { method: 'POST', body: form });
+    if (!res.ok) {
+      throw new Error(`HTTP error! status: ${res.status}`);
+    }
+    const data = await res.json();
+    console.log('Prediction result:', data);
+    updateTargets(data);
+  } catch (error) {
+    console.error('Prediction error:', error);
+    updateTargets({ 
+      label: null, 
+      confidence: 0, 
+      message: `Error: ${error.message}` 
+    });
+  }
 }
 
 function getConfThreshold() {
@@ -112,6 +142,7 @@ function updatePrediction({ label, confidence, message }) {
   const speakOn = $('#speak-toggle').checked;
   if (speakOn && label && confidence >= confTh && label !== lastSpoken) {
     lastSpoken = label;
+    console.log('Speaking:', label);
     speakText(label);
   }
 
@@ -141,8 +172,12 @@ $('#btn-capture').addEventListener('click', async () => {
 
 async function aiLoop() {
   if (!stream) await startWebcam();
-  const blob = await captureFrame();
-  await predictBlob(blob, updatePrediction);
+  try {
+    const blob = await captureFrame();
+    await predictBlob(blob, updatePrediction);
+  } catch (error) {
+    console.error('AI loop error:', error);
+  }
 }
 
 function startAI() {
@@ -150,8 +185,12 @@ function startAI() {
   aiBadge.classList.remove('hidden');
   $('#btn-ai').textContent = 'Stop AI';
   aiTimer = setInterval(async () => {
-    await aiLoop();
-    maybeAutoSpeakSentence();
+    try {
+      await aiLoop();
+      maybeAutoSpeakSentence();
+    } catch (error) {
+      console.error('AI timer error:', error);
+    }
   }, 500);
 }
 

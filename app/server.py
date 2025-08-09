@@ -1,6 +1,7 @@
 import io
 import json
 import os
+import logging
 from typing import List
 
 import numpy as np
@@ -11,7 +12,15 @@ from fastapi.staticfiles import StaticFiles
 from PIL import Image
 import pandas as pd
 import mediapipe as mp
-from tensorflow import keras
+try:
+    from tensorflow import keras
+except ImportError as e:
+    print(f"TensorFlow import error: {e}")
+    keras = None
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Get the directory where this file is located
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -91,11 +100,14 @@ async def startup_event():
     global LABELS, MODEL
     try:
         LABELS = load_labels(LABELS_PATH)
-        MODEL = load_model(DEFAULT_MODEL)
-        print(f"✅ Model loaded successfully with {len(LABELS)} labels")
+        if keras is not None:
+            MODEL = load_model(DEFAULT_MODEL)
+            logger.info(f"✅ Model loaded successfully with {len(LABELS)} labels")
+        else:
+            logger.warning("⚠️ TensorFlow not available, model loading skipped")
     except Exception as e:
-        print(f"⚠️ Warning: Could not load model: {e}")
-        print("⚠️ The API will work but predictions will fail until model is available")
+        logger.warning(f"⚠️ Warning: Could not load model: {e}")
+        logger.warning("⚠️ The API will work but predictions will fail until model is available")
 
 
 def extract_landmarks(img_np: np.ndarray, hand_landmarks) -> List[List[int]]:
@@ -124,6 +136,7 @@ def preprocess_landmarks(landmarks: List[List[int]]) -> List[float]:
 def predict_image(pil_img: Image.Image) -> np.ndarray:
     """Run prediction on a single image"""
     if MODEL is None:
+        logger.warning("Model not loaded, cannot predict")
         return None
     
     img_np = np.array(pil_img)
@@ -143,7 +156,7 @@ def predict_image(pil_img: Image.Image) -> np.ndarray:
             probs = MODEL.predict(df, verbose=0)[0]
             return probs
         except Exception as e:
-            print(f"Error during prediction: {e}")
+            logger.error(f"Error during prediction: {e}")
             return None
 
 
@@ -158,6 +171,8 @@ async def predict(image: UploadFile = File(...)):
 
     if MODEL is None:
         return JSONResponse({"label": None, "confidence": 0.0, "message": "Model not loaded"})
+
+    logger.info("Processing prediction request")
 
     # Test-time augmentation: slight resizes around the base image
     scales = [1.0, 0.9, 1.1]
@@ -190,6 +205,8 @@ async def predict(image: UploadFile = File(...)):
     idx = int(np.argmax(probs_avg))
     label = LABELS[idx] if idx < len(LABELS) else str(idx)
     conf = float(probs_avg[idx])
+    
+    logger.info(f"Prediction: {label} (confidence: {conf:.2f})")
     return {"label": label, "confidence": conf}
 
 
